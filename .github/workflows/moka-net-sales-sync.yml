@@ -1,0 +1,33 @@
+name: Moka Net Sales Daily Sync
+
+on:
+  schedule:
+    # 00:00 UTC = 07:00 WIB (UTC+7). GitHub cron bisa telat beberapa menit
+    # di jam-jam sibuk — itu normal untuk free tier.
+    - cron: '0 0 * * *'
+  workflow_dispatch: {}   # supaya bisa dijalankan manual dari tab Actions untuk testing
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Moka Net Sales sync
+        env:
+          MOKA_CLIENT_ID: ${{ secrets.MOKA_CLIENT_ID }}
+          MOKA_CLIENT_SECRET: ${{ secrets.MOKA_CLIENT_SECRET }}
+          MOKA_OUTLET_MAP: ${{ secrets.MOKA_OUTLET_MAP }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+        run: python moka_sheets_sync.py
