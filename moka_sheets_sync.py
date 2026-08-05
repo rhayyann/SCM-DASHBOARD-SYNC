@@ -13,7 +13,7 @@ Struktur spreadsheet baru (2 tab):
                   otomatis kalau Moka merotasi token)
   - "NetSales" -> header row 1:
       STORE | BULAN | TAHUN | COMBED 24S | COMBED 30S | KIDS 24S |
-      TUNIK 24S | PANJANG + RIB | REJECT | WANGKY MYNO |
+      TUNIK 24S | PANJANG + RIB | REJECT | WANGKI MYNO |
       NET SALES (TOTAL) | NET SALES (WO DEFECT)
 
 Alur:
@@ -62,7 +62,7 @@ MONTH_ID = [
 # Urutan kolom kategori di tab NetSales -- harus sama persis dengan header.
 CATEGORY_COLUMNS = [
     "COMBED 24S", "COMBED 30S", "KIDS 24S", "TUNIK 24S",
-    "PANJANG + RIB", "REJECT", "WANGKY MYNO",
+    "PANJANG + RIB", "REJECT", "WANGKI MYNO",
 ]
 DEFECT_CATEGORY = "REJECT"
 
