@@ -1,16 +1,38 @@
-name: Moka Net Sales Daily Sync
+name: Moka Net Sales Sync (Weekly)
 
 on:
+  # Trigger utama: dipanggil oleh cron-job.org tiap hari jam 07:00 WITA
+  # lewat GitHub API repository_dispatch. Lihat SETUP_MINGGUAN.md.
+  repository_dispatch:
+    types: [moka-daily-sync]
+
+  # Trigger manual dari tab Actions -> pilih mode "daily" (testing) atau
+  # "backfill" (isi histori Jan 2026 s.d. bulan sebelum bulan berjalan,
+  # cukup dijalankan SEKALI).
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Mode sinkronisasi'
+        required: true
+        default: 'daily'
+        type: choice
+        options:
+          - daily
+          - backfill
+      backfill_end:
+        description: 'Backfill sampai bulan apa (format YYYY-MM). Kosongkan = otomatis bulan sebelum bulan berjalan.'
+        required: false
+        type: string
+
+  # Jadwal cadangan kalau-kalau cron-job.org gagal trigger.
+  # 23:00 UTC = 07:00 WITA (Asia/Makassar, UTC+8) keesokan harinya.
   schedule:
-    # 00:00 UTC = 07:00 WIB (UTC+7). GitHub cron bisa telat beberapa menit
-    # di jam-jam sibuk — itu normal untuk free tier.
-    - cron: '0 0 * * *'
-  workflow_dispatch: {}   # supaya bisa dijalankan manual dari tab Actions untuk testing
+    - cron: '0 23 * * *'
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -30,4 +52,6 @@ jobs:
           MOKA_OUTLET_MAP: ${{ secrets.MOKA_OUTLET_MAP }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          MOKA_SYNC_MODE: ${{ github.event.inputs.mode || 'daily' }}
+          MOKA_BACKFILL_END: ${{ github.event.inputs.backfill_end || '' }}
         run: python moka_sheets_sync.py
