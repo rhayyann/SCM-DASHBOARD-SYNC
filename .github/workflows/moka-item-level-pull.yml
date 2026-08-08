@@ -1,0 +1,43 @@
+name: Moka Item-Level Pull (One-Time, Per Tahun)
+
+on:
+  # Manual only -- tidak ada schedule/repository_dispatch. Dipakai sesekali
+  # kalau butuh tarik data level item untuk tahun tertentu. Reusable: tahun
+  # dan spreadsheet tujuan diisi tiap kali run, tidak perlu ubah kode.
+  workflow_dispatch:
+    inputs:
+      year:
+        description: 'Tahun yang ditarik (contoh: 2021)'
+        required: true
+        type: string
+      target_sheet_id:
+        description: 'Sheet ID spreadsheet KHUSUS tahun ini (bukan dashboard utama) -- ambil dari URL spreadsheet, dan pastikan sudah di-share ke email service account sebagai Editor'
+        required: true
+        type: string
+
+jobs:
+  pull:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run item-level pull
+        env:
+          MOKA_CLIENT_ID: ${{ secrets.MOKA_CLIENT_ID }}
+          MOKA_CLIENT_SECRET: ${{ secrets.MOKA_CLIENT_SECRET }}
+          MOKA_OUTLET_MAP: ${{ secrets.MOKA_OUTLET_MAP }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          MOKA_ITEM_PULL_YEAR: ${{ github.event.inputs.year }}
+          MOKA_ITEM_PULL_TARGET_SHEET: ${{ github.event.inputs.target_sheet_id }}
+        run: python moka_item_level_pull.py
