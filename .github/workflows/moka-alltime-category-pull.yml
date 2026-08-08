@@ -1,0 +1,45 @@
+name: Moka All-Time Category Pull (One-Time)
+
+on:
+  # Sengaja HANYA workflow_dispatch — ini bukan sync rutin, cuma ditarik
+  # sesekali kalau butuh laporan. Tidak ada 'schedule' atau
+  # 'repository_dispatch' di sini, jadi tidak akan pernah jalan otomatis
+  # dan tidak akan bentrok dengan sync mingguan yang sudah ada.
+  workflow_dispatch:
+    inputs:
+      start:
+        description: 'Mulai dari bulan (format YYYY-MM)'
+        required: true
+        default: '2021-01'
+        type: string
+      end:
+        description: 'Sampai bulan apa (format YYYY-MM). Kosongkan = bulan berjalan.'
+        required: false
+        type: string
+
+jobs:
+  pull:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run all-time category pull
+        env:
+          MOKA_CLIENT_ID: ${{ secrets.MOKA_CLIENT_ID }}
+          MOKA_CLIENT_SECRET: ${{ secrets.MOKA_CLIENT_SECRET }}
+          MOKA_OUTLET_MAP: ${{ secrets.MOKA_OUTLET_MAP }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          MOKA_ALLTIME_START: ${{ github.event.inputs.start }}
+          MOKA_ALLTIME_END: ${{ github.event.inputs.end }}
+        run: python moka_alltime_category_pull.py
