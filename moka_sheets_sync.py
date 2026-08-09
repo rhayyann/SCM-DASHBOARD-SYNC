@@ -487,7 +487,9 @@ def upsert_netsales(netsales_ws, rows):
 
     updated, inserted = 0, 0
     new_rows = []
+    update_batch = []  # kumpulan {'range':..., 'values':[[...]]} — dikirim sekaligus, BUKAN 1 API call per baris
     now_str = datetime.now(MAKASSAR_TZ).strftime("%Y-%m-%d %H:%M WITA")
+    last_col_letter = gspread.utils.rowcol_to_a1(1, len(headers)).rstrip("0123456789")
 
     for rec in rows:
         key = make_key(rec["store"], rec["bulan"], rec["tahun"], rec["minggu"])
@@ -507,17 +509,60 @@ def upsert_netsales(netsales_ws, rows):
         row_values[idx["STATUS"]] = rec["status"]
 
         if row_num:
-            last_col_letter = gspread.utils.rowcol_to_a1(1, len(headers)).rstrip("1")
-            netsales_ws.update(f"A{row_num}:{last_col_letter}{row_num}", [row_values])
+            update_batch.append({
+                "range": f"A{row_num}:{last_col_letter}{row_num}",
+                "values": [row_values],
+            })
             updated += 1
         else:
             new_rows.append(row_values)
             inserted += 1
 
+    # ── Kirim semua UPDATE dalam batch (bukan 1 API call per baris) ──
+    # Google Sheets punya limit "write requests per menit per user"; ratusan
+    # baris x 1 call masing-masing gampang kena 429. batch_update() menggabung
+    # banyak range jadi 1 (atau sedikit) API call. Dipecah per chunk + retry
+    # kalau tetap kena rate-limit (defensif untuk backfill besar).
+    if update_batch:
+        _batch_update_with_retry(netsales_ws, update_batch)
+
+    # ── Baris baru: append_rows() sudah otomatis 1 API call untuk semua baris ──
     if new_rows:
-        netsales_ws.append_rows(new_rows)
+        _retry_on_ratelimit(lambda: netsales_ws.append_rows(new_rows))
 
     return updated, inserted
+
+
+def _retry_on_ratelimit(fn, max_retries=5, base_delay=20):
+    """Jalankan fn(); kalau kena 429 (rate limit Sheets API), tunggu lalu
+    coba lagi dengan backoff. Dipakai untuk membungkus semua panggilan tulis
+    ke Sheets yang tidak bisa dihindari jadi 1 batch tunggal."""
+    import time
+    for attempt in range(1, max_retries + 1):
+        try:
+            return fn()
+        except gspread.exceptions.APIError as e:
+            is_rate_limit = "429" in str(e) or "Quota exceeded" in str(e)
+            if not is_rate_limit or attempt == max_retries:
+                raise
+            delay = base_delay * attempt
+            print(f"[WARN] Kena rate limit Sheets API (percobaan {attempt}/{max_retries}), "
+                  f"tunggu {delay}s lalu coba lagi...")
+            time.sleep(delay)
+
+
+def _batch_update_with_retry(netsales_ws, update_batch, chunk_size=300):
+    """Kirim update_batch lewat batch_update(), dipecah per chunk_size range
+    supaya payload tidak terlalu besar dalam 1 request. Tiap chunk dibungkus
+    retry-on-429, dengan jeda singkat antar chunk untuk jaga-jaga."""
+    import time
+    total = len(update_batch)
+    for start in range(0, total, chunk_size):
+        chunk = update_batch[start:start + chunk_size]
+        _retry_on_ratelimit(lambda c=chunk: netsales_ws.batch_update(c, value_input_option="USER_ENTERED"))
+        print(f"[OK] Batch update terkirim: {min(start + chunk_size, total)}/{total} baris.")
+        if start + chunk_size < total:
+            time.sleep(2)  # jeda singkat antar chunk, jaga-jaga quota
 
 
 # ---------------------------------------------------------------------------
