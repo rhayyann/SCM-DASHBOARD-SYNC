@@ -1,54 +1,64 @@
 """
-MOKA NET SALES SYNC — versi Mingguan Senin-Minggu (v3)
+MOKA NET SALES SYNC — versi Harian (v4)
 Dipicu oleh cron-job.org via GitHub repository_dispatch, jam 07:00 WITA
 (Asia/Makassar, UTC+8) setiap hari. Ada juga jadwal cadangan (GitHub Actions
 schedule) kalau-kalau cron-job.org gagal trigger.
 
-PERUBAHAN DARI VERSI SEBELUMNYA (v2 -> v3)
+PERUBAHAN DARI VERSI SEBELUMNYA (v3 -> v4)
 --------------------------------------------
-1. Pembagian minggu diganti dari blok tanggal statis (1-7/8-14/15-21/22-akhir)
-   menjadi MINGGU KALENDER SENIN-MINGGU yang sesungguhnya. Karena minggu
-   kalender bisa menyeberang 2 bulan, dipakai aturan "Opsi B — mayoritas
-   hari": 1 minggu (7 hari, selalu utuh, tidak pernah dipecah) dicatat di
-   BULAN yang memiliki hari lebih banyak dari minggu itu. Contoh: minggu
-   27 Jul - 2 Agu 2026 (5 hari di Juli, 2 hari di Agustus) tercatat penuh
-   sebagai minggu terakhir bulan JULI. Konsekuensinya: jumlah MINGGU per
-   bulan tidak selalu 4 (bisa 4 atau 5), dan PERIODE kadang menyeberang
-   bulan (mis. "27 Juli - 2 Agustus 2026").
-   -> CATATAN PENTING: data historis yang sudah ditulis pakai konvensi lama
-      (blok 1-7/dst) TIDAK otomatis ikut format baru. Kalau mau histori ikut
-      konsisten pakai konvensi Senin-Minggu ini juga, jalankan ulang mode
-      "backfill" (lihat bawah) — baris lama akan di-overwrite (key matching
-      by STORE+BULAN+TAHUN+MINGGU) dengan angka & rentang tanggal yang baru.
-2. Kolom baru "STATUS" (paling kanan) berisi:
-     - "SEDANG BERJALAN" -> minggu ini belum kelar, masih live-update tiap
-       hari (angkanya masih "week-to-date" sampai hari berjalan)
-     - "SELESAI"         -> minggu sudah lewat sepenuhnya, jadi rekapan/
-       historical, tidak akan berubah lagi (kecuali ada koreksi refund dsb.)
-   Kolom ini ditambahkan otomatis & non-destruktif ke tab NetSales yang sudah
-   ada (lihat ensure_status_column) — tidak perlu ubah header manual.
-3. Mode "daily" sekarang mengecek bulan BERJALAN + bulan SEBELUMNYA (bukan
-   cuma bulan berjalan), supaya minggu yang menyeberang ke awal bulan baru
-   (pemiliknya bulan lalu, tapi belum kelar saat bulan sudah ganti) tetap
-   ke-update sampai benar-benar final. Minggu-minggu lama bulan lalu yang
-   sudah pasti final dilewati (tidak diproses ulang) biar hemat API call.
-4. Ada 2 mode jalan, diatur lewat env MOKA_SYNC_MODE:
-     - "daily"    (default, dipakai cron harian)
-     - "backfill" (dijalankan manual lewat workflow_dispatch): mengisi
-       histori dari Januari 2026 sampai akhir bulan SEBELUM bulan berjalan
-       (bisa dioverride lewat env MOKA_BACKFILL_END, format "YYYY-MM").
-5. Kalau tab "NetSales" yang lama (format bulanan, tanpa kolom MINGGU)
-   terdeteksi, otomatis di-rename jadi "NetSales_Old_Monthly_Archive" dan tab
-   "NetSales" baru dibuat dengan header mingguan yang benar.
-6. Tiap kali script jalan, satu baris log ditulis ke tab "SyncLog".
+1. Granularitas data diganti dari MINGGUAN menjadi HARIAN — 1 baris per
+   STORE per TANGGAL (bukan per STORE per MINGGU lagi). Alasannya: supaya
+   filter/agregasi BULANAN di dashboard bisa pakai KALENDER MURNI (Juli =
+   tanggal 1-31 Juli, titik — tidak lagi "nyerempet" ke bulan tetangga),
+   sekaligus tetap bisa hitung trend MINGGUAN (Senin-Minggu + aturan
+   mayoritas hari / "Opsi B") langsung dari data harian ini, baik di
+   pipeline (kolom MINGGU/PERIODE, sebagai referensi) maupun di dashboard.
+2. Kolom BULAN & TAHUN sekarang murni KALENDER — diambil langsung dari
+   TANGGAL baris itu sendiri, TIDAK lagi mengikuti aturan Opsi B. Kolom
+   MINGGU & PERIODE tetap dihitung pakai Opsi B (Senin-Minggu, dipulangkan
+   ke bulan mayoritas hari) — jadi murni informasi "hari ini termasuk
+   minggu keberapa & rentang tanggal berapa", TIDAK dipakai lagi sebagai
+   dasar pengelompokan bulanan.
+   -> Konsekuensi: BULAN dan (bulan pemilik dari) MINGGU/PERIODE bisa beda
+      untuk hari-hari di ujung bulan. Ini WAJAR & disengaja — mis. baris
+      tanggal 1 Agustus akan punya BULAN=Agustus, tapi MINGGU/PERIODE-nya
+      merujuk ke minggu "27 Juli - 2 Agustus" (yang pemiliknya Juli).
+3. Kolom baru "TANGGAL" (tanggal spesifik baris itu, format ISO YYYY-MM-DD)
+   sekarang jadi bagian resmi dari key unik baris: STORE + TANGGAL.
+4. Mode "daily" sekarang cukup proses 2 hari: KEMARIN (status SELESAI,
+   dianggap final) dan HARI INI (status SEDANG BERJALAN, buat jaga-jaga
+   kalau ada yang trigger manual di siang/sore hari — datanya akan terus
+   ke-update tiap kali script jalan sampai hari itu lewat).
+5. Mode "backfill" sekarang menerima RENTANG TANGGAL eksplisit lewat env
+   MOKA_BACKFILL_START & MOKA_BACKFILL_END (format "YYYY-MM-DD"), BUKAN lagi
+   "YYYY-MM". Ini supaya backfill besar (misal 1 tahun penuh = ratusan hari
+   x 12 outlet = ribuan API call ke Moka) bisa DIPECAH jadi beberapa run
+   manual (mis. run 1: Jan-Mar, run 2: Apr-Jun, dst) — lebih aman dari sisi
+   waktu proses & rate limit Moka.
+6. Fetch ke Moka API sekarang PARALEL per outlet (pakai ThreadPoolExecutor,
+   default 6 worker bersamaan) — karena sekarang ada JAUH lebih banyak
+   panggilan API (1 hari x 1 outlet = 1 API call, vs dulu 1 minggu x 1
+   outlet). Tanpa paralel, backfill 1 tahun bisa berjam-jam. Jumlah worker
+   bisa diatur lewat env MOKA_FETCH_WORKERS kalau perlu diturunkan (misal
+   kalau Moka mulai membatasi request beruntun).
+7. Kalau tab "NetSales" yang lama (format bulanan ATAU mingguan — dua-duanya
+   tidak punya kolom TANGGAL) terdeteksi, otomatis di-rename jadi
+   "NetSales_Old_Weekly_Archive" (atau "_2", "_3", dst kalau nama itu sudah
+   dipakai) dan tab "NetSales" baru dibuat dengan header harian yang benar.
+8. Kolom "STATUS" tetap ada, artinya sekarang lebih sederhana:
+     - "SEDANG BERJALAN" -> baris untuk HARI INI, masih bisa berubah kalau
+       script dijalankan ulang di hari yang sama
+     - "SELESAI"         -> hari itu sudah lewat, final, historical
+9. Tiap kali script jalan, satu baris log ditulis ke tab "SyncLog".
 
 Struktur spreadsheet (3 tab):
   - "Config"    -> sel B1 menyimpan refresh_token Moka
   - "NetSales"  -> header:
       STORE | BULAN | TAHUN | MINGGU | PERIODE | COMBED 24S | COMBED 30S |
       KIDS 24S | TUNIK 24S | PANJANG + RIB | REJECT | WANGKI MYNO |
-      NET SALES (TOTAL) | NET SALES (WO DEFECT) | LAST UPDATED | STATUS
-    Key unik per baris: STORE + BULAN + TAHUN + MINGGU
+      NET SALES (TOTAL) | NET SALES (WO DEFECT) | LAST UPDATED | TANGGAL |
+      STATUS
+    Key unik per baris: STORE + TANGGAL
   - "SyncLog"   -> header: WAKTU | MODE | SUKSES | GAGAL | CATATAN
 
 Referensi API Moka: https://api.mokapos.com/docs
@@ -56,8 +66,10 @@ Kredensial dari environment variable (GitHub Secrets):
   MOKA_CLIENT_ID, MOKA_CLIENT_SECRET, MOKA_OUTLET_MAP,
   GOOGLE_SERVICE_ACCOUNT_JSON, GOOGLE_SHEET_ID
 Opsional:
-  MOKA_SYNC_MODE   ("daily" default, atau "backfill")
-  MOKA_BACKFILL_END (format "YYYY-MM", hanya dipakai kalau mode=backfill)
+  MOKA_SYNC_MODE     ("daily" default, atau "backfill")
+  MOKA_BACKFILL_START (format "YYYY-MM-DD", default "2026-01-01")
+  MOKA_BACKFILL_END   (format "YYYY-MM-DD", default: kemarin)
+  MOKA_FETCH_WORKERS  (jumlah thread paralel fetch Moka, default 6)
 """
 
 import os
@@ -65,6 +77,7 @@ import sys
 import json
 import calendar
 from datetime import datetime, date, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 import gspread
@@ -79,7 +92,7 @@ API_BASE = "https://api.mokapos.com"
 SHEET_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 CONFIG_SHEET_NAME = "Config"
 NETSALES_SHEET_NAME = "NetSales"
-NETSALES_ARCHIVE_NAME = "NetSales_Old_Monthly_Archive"
+NETSALES_ARCHIVE_NAME = "NetSales_Old_Weekly_Archive"
 SYNCLOG_SHEET_NAME = "SyncLog"
 REFRESH_TOKEN_CELL = "B1"
 
@@ -89,10 +102,11 @@ MOKA_OUTLET_MAP_RAW = os.environ.get("MOKA_OUTLET_MAP", "{}")
 GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
 GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID")
 SYNC_MODE = os.environ.get("MOKA_SYNC_MODE", "daily").strip().lower()
+BACKFILL_START_RAW = os.environ.get("MOKA_BACKFILL_START", "").strip()
 BACKFILL_END_RAW = os.environ.get("MOKA_BACKFILL_END", "").strip()
+FETCH_WORKERS = int(os.environ.get("MOKA_FETCH_WORKERS", "6") or "6")
 
-BACKFILL_START_YEAR = 2026
-BACKFILL_START_MONTH = 1
+DEFAULT_BACKFILL_START = date(2026, 1, 1)
 
 MONTH_ID = [
     "JANUARI", "FEBRUARI", "MARET", "APRIL", "MEI", "JUNI",
@@ -108,12 +122,12 @@ DEFECT_CATEGORY = "REJECT"
 HEADER_ROW = (
     ["STORE", "BULAN", "TAHUN", "MINGGU", "PERIODE"]
     + CATEGORY_COLUMNS
-    + ["NET SALES (TOTAL)", "NET SALES (WO DEFECT)", "LAST UPDATED", "STATUS"]
+    + ["NET SALES (TOTAL)", "NET SALES (WO DEFECT)", "LAST UPDATED", "TANGGAL", "STATUS"]
 )
 
 # Nilai kolom STATUS
-STATUS_ONGOING = "SEDANG BERJALAN"   # minggu ini belum kelar, masih di-update tiap hari
-STATUS_FINAL   = "SELESAI"           # minggu sudah lewat, jadi rekapan/historical
+STATUS_ONGOING = "SEDANG BERJALAN"   # baris untuk HARI INI, masih bisa berubah
+STATUS_FINAL   = "SELESAI"           # hari sudah lewat, final/historical
 
 SYNCLOG_HEADER = ["WAKTU", "MODE", "SUKSES", "GAGAL", "CATATAN"]
 
@@ -158,6 +172,15 @@ def require_env():
     return outlet_map, sa_info
 
 
+def _parse_iso_date(raw, label):
+    """Parse string 'YYYY-MM-DD' -> date. Exit kalau formatnya salah."""
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d").date()
+    except ValueError:
+        print(f"[FATAL] {label} format salah: '{raw}' (harus 'YYYY-MM-DD')")
+        sys.exit(1)
+
+
 def open_sheets(sa_info):
     creds = Credentials.from_service_account_info(sa_info, scopes=SHEET_SCOPES)
     gc = gspread.authorize(creds)
@@ -183,22 +206,23 @@ def open_sheets(sa_info):
 
 
 def get_or_migrate_netsales_tab(sh):
-    """Ambil tab NetSales. Kalau formatnya masih format bulanan lama (tanpa
-    kolom MINGGU), arsipkan tab lama itu dan buat tab NetSales baru dengan
-    header mingguan yang benar — otomatis, tanpa perlu diedit manual."""
+    """Ambil tab NetSales. Kalau formatnya masih format lama (bulanan ATAU
+    mingguan — dua-duanya tidak punya kolom TANGGAL), arsipkan tab lama itu
+    dan buat tab NetSales baru dengan header harian yang benar — otomatis,
+    tanpa perlu diedit manual."""
     try:
         ws = sh.worksheet(NETSALES_SHEET_NAME)
     except gspread.exceptions.WorksheetNotFound:
         ws = sh.add_worksheet(title=NETSALES_SHEET_NAME, rows=200, cols=len(HEADER_ROW) + 2)
         ws.append_row(HEADER_ROW)
-        print(f"[OK] Tab '{NETSALES_SHEET_NAME}' baru dibuat dengan header mingguan.")
+        print(f"[OK] Tab '{NETSALES_SHEET_NAME}' baru dibuat dengan header harian.")
         return ws
 
     existing_header = ws.row_values(1)
-    if existing_header and "MINGGU" in [h.strip().upper() for h in existing_header]:
-        return ws  # sudah format baru, tidak perlu migrasi
+    if existing_header and "TANGGAL" in [h.strip().upper() for h in existing_header]:
+        return ws  # sudah format harian, tidak perlu migrasi
 
-    # Format lama terdeteksi (atau tab kosong tanpa header MINGGU) -> arsipkan
+    # Format lama terdeteksi (bulanan/mingguan, atau tab kosong) -> arsipkan
     archive_name = NETSALES_ARCHIVE_NAME
     suffix = 2
     existing_titles = [w.title for w in sh.worksheets()]
@@ -211,7 +235,7 @@ def get_or_migrate_netsales_tab(sh):
         print(f"[OK] Tab NetSales format lama diarsipkan sebagai '{archive_name}'.")
         new_ws = sh.add_worksheet(title=NETSALES_SHEET_NAME, rows=200, cols=len(HEADER_ROW) + 2)
         new_ws.append_row(HEADER_ROW)
-        print(f"[OK] Tab '{NETSALES_SHEET_NAME}' baru dibuat dengan header mingguan.")
+        print(f"[OK] Tab '{NETSALES_SHEET_NAME}' baru dibuat dengan header harian.")
         return new_ws
     else:
         ws.append_row(HEADER_ROW)
@@ -352,62 +376,51 @@ def add_month(year, month, delta):
     return idx // 12, idx % 12 + 1
 
 
-def periods_to_process():
-    """Kembalikan list (year, month, week_num, start_date, end_date, status)
-    yang perlu diambil datanya, tergantung mode ('daily' vs 'backfill').
-    status: "SEDANG BERJALAN" kalau minggu itu belum kelar (end_date_asli >=
-    hari ini), atau "SELESAI" kalau sudah lewat — dipakai dashboard buat tahu
-    baris mana yang masih live-update vs yang sudah final/historical."""
+def week_info_for_day(d):
+    """Untuk 1 tanggal, kembalikan info minggu Senin-Minggu yang memuatnya
+    (dipakai untuk mengisi kolom MINGGU & PERIODE -- REFERENSI SAJA, bukan
+    dasar pengelompokan bulanan lagi). Return (week_num, wstart, wend,
+    owner_year, owner_month) -- week_num adalah nomor urut minggu itu DALAM
+    bulan pemiliknya (owner_year, owner_month), yang bisa beda dari bulan
+    kalender tanggal d sendiri kalau d ada di ujung bulan."""
+    wstart = week_start_monday(d)
+    wend = wstart + timedelta(days=6)
+    owner_y, owner_m = week_owner_month(wstart, wend)
+    for week_num, ws, we in weeks_for_month(owner_y, owner_m):
+        if ws == wstart:
+            return week_num, ws, we, owner_y, owner_m
+    # Fallback, seharusnya tidak pernah kejadian kalau weeks_for_month benar
+    return 1, wstart, wend, owner_y, owner_m
+
+
+def days_to_process():
+    """Kembalikan list (tanggal, status) yang perlu diambil datanya,
+    tergantung mode ('daily' vs 'backfill'). status: "SEDANG BERJALAN" untuk
+    HARI INI (masih bisa berubah kalau di-run ulang hari yang sama), atau
+    "SELESAI" untuk hari yang sudah lewat (final/historical)."""
     now = datetime.now(MAKASSAR_TZ)
     today = now.date()
-    periods = []
+    days = []
 
     if SYNC_MODE == "backfill":
-        if BACKFILL_END_RAW:
-            try:
-                end_year, end_month = (int(x) for x in BACKFILL_END_RAW.split("-"))
-            except ValueError:
-                print(f"[FATAL] MOKA_BACKFILL_END format salah: '{BACKFILL_END_RAW}' "
-                      "(harus 'YYYY-MM')")
-                sys.exit(1)
-        else:
-            end_year, end_month = add_month(now.year, now.month, -1)
+        start_d = _parse_iso_date(BACKFILL_START_RAW, "MOKA_BACKFILL_START") \
+            if BACKFILL_START_RAW else DEFAULT_BACKFILL_START
+        end_d = _parse_iso_date(BACKFILL_END_RAW, "MOKA_BACKFILL_END") \
+            if BACKFILL_END_RAW else (today - timedelta(days=1))
+        end_d = min(end_d, today)  # jaga-jaga jangan sampai narik "masa depan"
 
-        y, m = BACKFILL_START_YEAR, BACKFILL_START_MONTH
-        while (y, m) <= (end_year, end_month):
-            for week_num, wstart, wend in weeks_for_month(y, m):
-                if wstart > today:
-                    continue
-                end_d = min(wend, today)
-                status = STATUS_FINAL if wend < today else STATUS_ONGOING
-                periods.append((y, m, week_num, wstart, end_d, status))
-            y, m = add_month(y, m, 1)
+        d = start_d
+        while d <= end_d:
+            status = STATUS_FINAL if d < today else STATUS_ONGOING
+            days.append((d, status))
+            d += timedelta(days=1)
 
-    else:  # daily
-        # Cek bulan berjalan + bulan sebelumnya, supaya minggu yang "menyeberang"
-        # ke awal bulan baru (pemiliknya bulan lalu, tapi belum kelar) tetap
-        # ke-update sampai selesai. Minggu lama bulan lalu yang sudah lama
-        # final (bukan 1 minggu terakhir) dilewati biar tidak boros API call.
-        prev_y, prev_m = add_month(now.year, now.month, -1)
-        candidate_months = [(prev_y, prev_m), (now.year, now.month)]
-        seen = set()
+    else:  # daily -- cukup kemarin (final) + hari ini (masih berjalan)
+        yesterday = today - timedelta(days=1)
+        days.append((yesterday, STATUS_FINAL))
+        days.append((today, STATUS_ONGOING))
 
-        for (y, m) in candidate_months:
-            is_prev_month = (y, m) == (prev_y, prev_m)
-            for week_num, wstart, wend in weeks_for_month(y, m):
-                if wstart > today:
-                    continue  # minggu belum mulai
-                if is_prev_month and wend < today - timedelta(days=1):
-                    continue  # minggu lama bulan lalu, sudah pasti final — skip
-                key = (y, m, week_num)
-                if key in seen:
-                    continue
-                seen.add(key)
-                end_d = min(wend, today)
-                status = STATUS_FINAL if wend < today else STATUS_ONGOING
-                periods.append((y, m, week_num, wstart, end_d, status))
-
-    return periods
+    return days
 
 
 def periode_label(start_d, end_d, month_name):
@@ -452,8 +465,8 @@ def compute_category_breakdown(item_sales):
 # Upsert ke NetSales
 # ---------------------------------------------------------------------------
 
-def make_key(store, bulan, tahun, minggu):
-    return f"{str(store).strip().upper()}|{str(bulan).strip().upper()}|{str(tahun).strip()}|{str(minggu).strip()}"
+def make_key(store, tanggal_iso):
+    return f"{str(store).strip().upper()}|{str(tanggal_iso).strip()}"
 
 
 def upsert_netsales(netsales_ws, rows):
@@ -471,7 +484,7 @@ def upsert_netsales(netsales_ws, rows):
     required_cols = (
         ["STORE", "BULAN", "TAHUN", "MINGGU", "PERIODE"]
         + CATEGORY_COLUMNS
-        + ["NET SALES (TOTAL)", "NET SALES (WO DEFECT)", "LAST UPDATED", "STATUS"]
+        + ["NET SALES (TOTAL)", "NET SALES (WO DEFECT)", "LAST UPDATED", "TANGGAL", "STATUS"]
     )
     for required in required_cols:
         if required not in idx:
@@ -482,7 +495,7 @@ def upsert_netsales(netsales_ws, rows):
     for i, r in enumerate(existing):
         def cell(col):
             return r[idx[col]] if idx[col] < len(r) else ""
-        key = make_key(cell("STORE"), cell("BULAN"), cell("TAHUN"), cell("MINGGU"))
+        key = make_key(cell("STORE"), cell("TANGGAL"))
         key_to_rownum[key] = i + 2  # +2: header + 1-indexed
 
     updated, inserted = 0, 0
@@ -492,7 +505,7 @@ def upsert_netsales(netsales_ws, rows):
     last_col_letter = gspread.utils.rowcol_to_a1(1, len(headers)).rstrip("0123456789")
 
     for rec in rows:
-        key = make_key(rec["store"], rec["bulan"], rec["tahun"], rec["minggu"])
+        key = make_key(rec["store"], rec["tanggal_iso"])
         row_num = key_to_rownum.get(key)
 
         row_values = [""] * len(headers)
@@ -506,6 +519,7 @@ def upsert_netsales(netsales_ws, rows):
         row_values[idx["NET SALES (TOTAL)"]] = rec["net_total"]
         row_values[idx["NET SALES (WO DEFECT)"]] = rec["net_wo_defect"]
         row_values[idx["LAST UPDATED"]] = now_str
+        row_values[idx["TANGGAL"]] = rec["tanggal_iso"]
         row_values[idx["STATUS"]] = rec["status"]
 
         if row_num:
@@ -569,6 +583,14 @@ def _batch_update_with_retry(netsales_ws, update_batch, chunk_size=300):
 # Main
 # ---------------------------------------------------------------------------
 
+def _fetch_one(outlet_id, store_name, access_token, day, status):
+    """1 unit kerja: fetch item sales utk 1 outlet, 1 hari. Dipanggil paralel
+    lewat ThreadPoolExecutor -- HTTP request murni, aman dijalankan di thread
+    terpisah (tidak ada shared mutable state di sini)."""
+    item_sales = fetch_outlet_item_sales(outlet_id, access_token, day, day)
+    return outlet_id, store_name, day, status, item_sales
+
+
 def main():
     outlet_map, sa_info = require_env()
     config_ws, netsales_ws, synclog_ws = open_sheets(sa_info)
@@ -576,24 +598,33 @@ def main():
     stored_refresh_token = get_stored_refresh_token(config_ws)
     access_token = refresh_access_token(config_ws, stored_refresh_token)
 
-    periods = periods_to_process()
-    if not periods:
-        print("[INFO] Tidak ada periode yang perlu diproses hari ini.")
-        log_sync_run(synclog_ws, SYNC_MODE, 0, 0, "Tidak ada periode diproses")
+    days = days_to_process()
+    if not days:
+        print("[INFO] Tidak ada tanggal yang perlu diproses hari ini.")
+        log_sync_run(synclog_ws, SYNC_MODE, 0, 0, "Tidak ada tanggal diproses")
         return
 
-    print(f"[INFO] Mode: {SYNC_MODE}. Jumlah periode (bulan x minggu) diproses: {len(periods)}")
+    total_tasks = len(days) * len(outlet_map)
+    print(f"[INFO] Mode: {SYNC_MODE}. Jumlah hari: {len(days)} "
+          f"({days[0][0]} s/d {days[-1][0]}), outlet: {len(outlet_map)}, "
+          f"total fetch: {total_tasks} (paralel {FETCH_WORKERS} worker).")
 
     rows = []
     success_outlets, failed_outlets = 0, 0
+    done_count = 0
 
-    for (year, month, week_num, start_d, end_d, status) in periods:
-        bulan = MONTH_ID[month - 1]
-        tahun = str(year)
-        periode = periode_label(start_d, end_d, bulan)
-
-        for outlet_id, store_name in outlet_map.items():
-            item_sales = fetch_outlet_item_sales(outlet_id, access_token, start_d, end_d)
+    # -- Fetch ke Moka API paralel per (hari x outlet) -- jauh lebih banyak
+    # panggilan dibanding versi mingguan, jadi wajib paralel biar backfill
+    # besar tidak berjam-jam / kena timeout GitHub Actions. --
+    with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as executor:
+        futures = [
+            executor.submit(_fetch_one, outlet_id, store_name, access_token, day, status)
+            for (day, status) in days
+            for outlet_id, store_name in outlet_map.items()
+        ]
+        for future in as_completed(futures):
+            outlet_id, store_name, day, status, item_sales = future.result()
+            done_count += 1
             if item_sales is None:
                 failed_outlets += 1
                 continue
@@ -603,21 +634,29 @@ def main():
             net_defect = breakdown[DEFECT_CATEGORY]
             net_wo_defect = net_total - net_defect
 
+            bulan = MONTH_ID[day.month - 1]  # BULAN sekarang kalender murni
+            tahun = str(day.year)
+            week_num, wstart, wend, owner_y, owner_m = week_info_for_day(day)
+            periode = periode_label(wstart, wend, MONTH_ID[owner_m - 1])
+            tanggal_iso = day.isoformat()
+
             rows.append({
                 "store": store_name,
                 "bulan": bulan,
                 "tahun": tahun,
                 "minggu": week_num,
                 "periode": periode,
+                "tanggal_iso": tanggal_iso,
                 "breakdown": breakdown,
                 "net_total": net_total,
                 "net_wo_defect": net_wo_defect,
                 "status": status,
             })
             success_outlets += 1
-            print(f"  [{bulan} {tahun} - Minggu {week_num} ({periode}) - {status}] {store_name} "
-                  f"({outlet_id}): TOTAL={net_total:,.0f} DEFECT={net_defect:,.0f} "
-                  f"WO_DEFECT={net_wo_defect:,.0f}")
+            if done_count % 25 == 0 or done_count == total_tasks:
+                print(f"  [{done_count}/{total_tasks}] {tanggal_iso} {store_name}: "
+                      f"TOTAL={net_total:,.0f} DEFECT={net_defect:,.0f} "
+                      f"WO_DEFECT={net_wo_defect:,.0f}")
 
     if not rows:
         print("[FATAL] Tidak ada data yang berhasil diambil dari outlet manapun.")
