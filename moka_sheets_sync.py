@@ -207,9 +207,15 @@ def open_sheets(sa_info):
 
 def get_or_migrate_netsales_tab(sh):
     """Ambil tab NetSales. Kalau formatnya masih format lama (bulanan ATAU
-    mingguan — dua-duanya tidak punya kolom TANGGAL), arsipkan tab lama itu
-    dan buat tab NetSales baru dengan header harian yang benar — otomatis,
-    tanpa perlu diedit manual."""
+    mingguan), arsipkan tab lama itu dan buat tab NetSales baru dengan
+    header harian yang benar — otomatis, tanpa perlu diedit manual.
+
+    PENTING: deteksi "sudah format harian" TIDAK bisa cuma mengandalkan nama
+    kolom "TANGGAL" ada di header — beberapa sheet lama ternyata sudah punya
+    kolom "TANGGAL" peninggalan manual yang KOSONG (bukan buatan script).
+    Jadi di sini kita cek juga ISI-nya: ambil beberapa baris data pertama,
+    kalau kolom TANGGAL-nya kosong semua, berarti itu bukan format harian
+    yang sebenarnya — tetap dianggap format lama dan diarsipkan."""
     try:
         ws = sh.worksheet(NETSALES_SHEET_NAME)
     except gspread.exceptions.WorksheetNotFound:
@@ -219,10 +225,22 @@ def get_or_migrate_netsales_tab(sh):
         return ws
 
     existing_header = ws.row_values(1)
-    if existing_header and "TANGGAL" in [h.strip().upper() for h in existing_header]:
-        return ws  # sudah format harian, tidak perlu migrasi
+    headers_upper = [h.strip().upper() for h in existing_header]
+    is_new_format = False
+    if existing_header and "TANGGAL" in headers_upper and "STATUS" in headers_upper:
+        tanggal_idx = headers_upper.index("TANGGAL")
+        sample_rows = ws.get_all_values()[1:6]  # 5 baris data pertama saja, cukup buat sampling
+        has_real_dates = any(
+            len(r) > tanggal_idx and r[tanggal_idx].strip()
+            for r in sample_rows
+        )
+        is_new_format = has_real_dates
 
-    # Format lama terdeteksi (bulanan/mingguan, atau tab kosong) -> arsipkan
+    if is_new_format:
+        return ws  # sudah format harian beneran (kolom TANGGAL terisi), tidak perlu migrasi
+
+    # Format lama terdeteksi (bulanan/mingguan, kolom TANGGAL kosong/tidak
+    # ada, atau tab kosong) -> arsipkan
     archive_name = NETSALES_ARCHIVE_NAME
     suffix = 2
     existing_titles = [w.title for w in sh.worksheets()]
