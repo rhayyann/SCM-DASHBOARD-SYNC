@@ -1,4 +1,4 @@
-name: Moka Net Sales Sync (Weekly)
+name: Moka Net Sales Sync (Harian)
 
 on:
   # Trigger utama: dipanggil oleh cron-job.org tiap hari jam 07:00 WITA
@@ -7,8 +7,8 @@ on:
     types: [moka-daily-sync]
 
   # Trigger manual dari tab Actions -> pilih mode "daily" (testing) atau
-  # "backfill" (isi histori Jan 2026 s.d. bulan sebelum bulan berjalan,
-  # cukup dijalankan SEKALI).
+  # "backfill" (isi histori per rentang tanggal, bisa dipecah beberapa run
+  # kalau rentangnya panjang -- lihat catatan di backfill_start/backfill_end).
   workflow_dispatch:
     inputs:
       mode:
@@ -19,8 +19,12 @@ on:
         options:
           - daily
           - backfill
+      backfill_start:
+        description: 'Backfill mulai tanggal (format YYYY-MM-DD). Kosongkan = otomatis 2026-01-01.'
+        required: false
+        type: string
       backfill_end:
-        description: 'Backfill sampai bulan apa (format YYYY-MM). Kosongkan = otomatis bulan sebelum bulan berjalan.'
+        description: 'Backfill sampai tanggal (format YYYY-MM-DD). Kosongkan = otomatis kemarin. Untuk rentang panjang (>3 bulan), disarankan dipecah jadi beberapa run terpisah.'
         required: false
         type: string
 
@@ -32,7 +36,12 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Backfill harian (bukan mingguan lagi) berarti jauh lebih banyak
+    # panggilan API per outlet -> timeout dinaikkan dari 15 ke 60 menit.
+    # Fetch sudah dijalankan paralel (lihat MOKA_FETCH_WORKERS di script),
+    # tapi kalau backfill-nya sangat panjang (banyak bulan sekaligus),
+    # tetap disarankan dipecah jadi beberapa run manual.
+    timeout-minutes: 60
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -53,5 +62,7 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
           MOKA_SYNC_MODE: ${{ github.event.inputs.mode || 'daily' }}
+          MOKA_BACKFILL_START: ${{ github.event.inputs.backfill_start || '' }}
           MOKA_BACKFILL_END: ${{ github.event.inputs.backfill_end || '' }}
+          MOKA_FETCH_WORKERS: '6'
         run: python moka_sheets_sync.py
