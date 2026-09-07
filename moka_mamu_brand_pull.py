@@ -25,9 +25,9 @@ mengandung kata kunci brand (default "MAMU", bisa diganti lewat input
 workflow), item itu ikut ditarik -- apapun nama outlet-nya.
 
 Kolom per tab store:
-  BULAN | TAHUN | CATEGORY | ITEM | ITEM SOLD | ITEM REFUND | ITEM TOTAL |
+  BULAN | TAHUN | CATEGORY | ITEM | ITEMS SOLD | ITEMS REFUND | ITEM TOTAL |
   NET SALES | LAST UPDATED
-  (ITEM TOTAL = ITEM SOLD - ITEM REFUND, sesuai diminta)
+  (ITEM TOTAL = ITEMS SOLD - ITEMS REFUND, sesuai diminta)
   Key unik per baris (dalam 1 tab store): BULAN + TAHUN + CATEGORY + ITEM
 
 CATATAN SOAL FIELD REFUND
@@ -36,7 +36,7 @@ Skema response Moka /reports/item_sales tidak didokumentasikan secara publik
 untuk field refund, jadi script ini mencoba beberapa nama field yang umum
 dipakai (lihat REFUND_QTY_KEYS di bawah) -- persis seperti pola get_first()
 yang sudah dipakai di moka_item_level_pull.py untuk field quantity. Kalau
-setelah run pertama kolom "ITEM REFUND" selalu 0 padahal Anda yakin ada
+setelah run pertama kolom "ITEMS REFUND" selalu 0 padahal Anda yakin ada
 retur, cek log [DEBUG SAMPLE ITEM KEYS] di output workflow run -- itu akan
 menampilkan nama-nama field asli yang dikirim Moka untuk 1 item contoh,
 supaya nama field yang benar bisa ditambahkan ke REFUND_QTY_KEYS.
@@ -97,15 +97,17 @@ MONTH_ID = [
 
 HEADER_ROW = [
     "BULAN", "TAHUN", "CATEGORY", "ITEM",
-    "ITEM SOLD", "ITEM REFUND", "ITEM TOTAL", "NET SALES", "LAST UPDATED",
+    "ITEMS SOLD", "ITEMS REFUND", "ITEM TOTAL", "NET SALES", "LAST UPDATED",
 ]
 
 # Kandidat nama field qty terjual & qty refund di response Moka -- diambil
-# yang pertama ketemu (skema akun bisa beda-beda, sesuaikan kalau perlu
-# setelah cek [DEBUG SAMPLE ITEM KEYS] di log run pertama).
-SOLD_QTY_KEYS = ["quantity", "qty", "qty_sold", "item_quantity", "quantity_sold"]
+# yang pertama ketemu. "item_sold" & "item_refunded" adalah nama field asli
+# dari dokumentasi resmi endpoint reports/item_sales (dikonfirmasi via
+# GoBiz Developer Portal, integrator resmi Moka) -- taruh paling depan.
+# Sisanya cadangan kalau skema akun ternyata beda.
+SOLD_QTY_KEYS = ["item_sold", "quantity", "qty", "qty_sold", "item_quantity", "quantity_sold"]
 REFUND_QTY_KEYS = [
-    "quantity_refund", "qty_refund", "refund_quantity", "refunded_quantity",
+    "item_refunded", "quantity_refund", "qty_refund", "refund_quantity", "refunded_quantity",
     "total_refund_quantity", "quantity_returned", "qty_return", "return_quantity",
     "quantity_void", "void_quantity",
 ]
@@ -297,7 +299,7 @@ _debug_sample_printed = False
 
 def maybe_print_debug_sample(item_sales):
     """Cetak SEKALI nama-nama field mentah dari 1 item Moka, supaya kalau
-    ITEM REFUND ternyata selalu 0, nama field aslinya bisa dicek di log."""
+    ITEMS REFUND ternyata selalu 0, nama field aslinya bisa dicek di log."""
     global _debug_sample_printed
     if _debug_sample_printed or not item_sales:
         return
@@ -368,8 +370,8 @@ def upsert_store_rows(ws, rows):
         row_values[idx["TAHUN"]] = rec["tahun"]
         row_values[idx["CATEGORY"]] = rec["category"]
         row_values[idx["ITEM"]] = rec["item"]
-        row_values[idx["ITEM SOLD"]] = rec["item_sold"]
-        row_values[idx["ITEM REFUND"]] = rec["item_refund"]
+        row_values[idx["ITEMS SOLD"]] = rec["item_sold"]
+        row_values[idx["ITEMS REFUND"]] = rec["item_refund"]
         row_values[idx["ITEM TOTAL"]] = rec["item_total"]
         row_values[idx["NET SALES"]] = rec["net_sales"]
         row_values[idx["LAST UPDATED"]] = now_str
