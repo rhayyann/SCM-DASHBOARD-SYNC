@@ -2,11 +2,16 @@
 MOKA MAMU BRAND PULL — script SEKALI JALAN (bukan cron), per BULAN, SEMUA
 STORE, SEJAK AWAL PENCATATAN — khusus brand MAMU
 File & workflow BARU. TIDAK mengubah/menyentuh moka_sheets_sync.py,
-moka_alltime_category_pull.py, moka_item_level_pull.py, atau tab manapun di
-spreadsheet dashboard utama (GOOGLE_SHEET_ID). Config/token tetap dibaca dari
-sana (read-only), tapi semua tulisan pergi ke spreadsheet TUJUAN terpisah
-(TARGET_SHEET_ID) -- jadi aman dijalankan berkali-kali tanpa risiko merusak
-data yang sudah ada.
+moka_alltime_category_pull.py, moka_item_level_pull.py, atau tab DATA
+manapun di spreadsheet dashboard utama (GOOGLE_SHEET_ID). Semua tulisan
+data pergi ke spreadsheet TUJUAN terpisah (TARGET_SHEET_ID).
+
+SATU pengecualian yang WAJIB: sel Config!B1 (refresh_token) di spreadsheet
+dashboard utama TETAP ditulis balik kalau Moka merotasi tokennya saat
+dipakai di sini -- karena Moka pakai rotating refresh_token (dipakai
+sekali, otomatis mati, harus diganti yang baru). Ini SAMA seperti perilaku
+moka_sheets_sync.py & script lain, dan WAJIB supaya sync harian/pull lain
+yang baca dari Config yang sama tidak kebagian token basi.
 
 TUJUAN
 ------
@@ -53,7 +58,7 @@ CARA PAKAI
 Env yang dipakai (sama seperti pull lain, tidak perlu secret baru):
   MOKA_CLIENT_ID, MOKA_CLIENT_SECRET, MOKA_OUTLET_MAP,
   GOOGLE_SERVICE_ACCOUNT_JSON  (sama seperti pull lain)
-  GOOGLE_SHEET_ID              (spreadsheet dashboard utama -- sumber Config/token, read-only)
+  GOOGLE_SHEET_ID              (spreadsheet dashboard utama -- sumber Config/token; sel token BISA ditulis balik kalau dirotasi Moka)
   MOKA_MAMU_TARGET_SHEET       (Sheet ID spreadsheet TUJUAN rekap MAMU, wajib)
   MOKA_MAMU_START              (bulan mulai, format YYYY-MM, default "2021-01")
   MOKA_MAMU_END                (bulan akhir, format YYYY-MM, default bulan berjalan)
@@ -83,7 +88,7 @@ MOKA_CLIENT_ID = os.environ.get("MOKA_CLIENT_ID")
 MOKA_CLIENT_SECRET = os.environ.get("MOKA_CLIENT_SECRET")
 MOKA_OUTLET_MAP_RAW = os.environ.get("MOKA_OUTLET_MAP", "{}")
 GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
-GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID")  # dashboard utama -- read-only (Config/token)
+GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID")  # dashboard utama -- sumber Config/token (token cell bisa ditulis balik)
 
 TARGET_SHEET_ID = os.environ.get("MOKA_MAMU_TARGET_SHEET", "").strip()
 MAMU_START_RAW = os.environ.get("MOKA_MAMU_START", "2021-01").strip()
@@ -160,7 +165,7 @@ def open_config_ws(gc):
     try:
         sh = gc.open_by_key(GOOGLE_SHEET_ID)
     except gspread.exceptions.APIError as e:
-        print(f"[FATAL] Tidak bisa buka spreadsheet dashboard utama (read-only): {e}")
+        print(f"[FATAL] Tidak bisa buka spreadsheet dashboard utama: {e}")
         sys.exit(1)
     try:
         return sh.worksheet(CONFIG_SHEET_NAME)
@@ -188,14 +193,18 @@ def get_stored_refresh_token(config_ws):
 
 
 def save_refresh_token(config_ws, token):
-    # Tidak dipakai di script ini -- token TIDAK ditulis balik ke dashboard
-    # utama supaya script ini benar-benar read-only terhadap Config. Kalau
-    # Moka merotasi refresh_token saat dipakai di sini, sync harian
-    # (moka_sheets_sync.py) yang jalan berikutnya akan merotasinya sendiri.
-    pass
+    config_ws.update_acell(REFRESH_TOKEN_CELL, token)
 
 
-def refresh_access_token(refresh_token):
+def refresh_access_token(config_ws, refresh_token):
+    # PENTING: Moka pakai ROTATING refresh_token -- setiap kali dipakai,
+    # Moka langsung menerbitkan refresh_token BARU dan yang lama otomatis
+    # mati. Karena itu token baru WAJIB ditulis balik ke Config!B1 di sini
+    # juga (persis seperti moka_sheets_sync.py & script lain), supaya sync
+    # harian dan pull manual lain yang baca dari Config yang sama tidak
+    # kebagian token basi. (Versi awal script ini SENGAJA tidak menulis
+    # balik dengan alasan "read-only" -- itu keliru dan menyebabkan
+    # Config!B1 kena token basi setelah run pertama; jangan diulang.)
     resp = requests.post(
         TOKEN_URL,
         json={
@@ -208,8 +217,20 @@ def refresh_access_token(refresh_token):
     )
     if resp.status_code != 200:
         print(f"[FATAL] Gagal refresh access_token: {resp.status_code} {resp.text}")
+        print("Kemungkinan refresh_token sudah di-revoke/basi. Perlu ambil authorization "
+              "code baru dari Moka Back Office lalu tukar manual, isi ulang ke "
+              f"{CONFIG_SHEET_NAME}!{REFRESH_TOKEN_CELL} di spreadsheet dashboard utama.")
         sys.exit(1)
-    return resp.json().get("access_token")
+
+    data = resp.json()
+    access_token = data.get("access_token")
+    new_refresh_token = data.get("refresh_token")
+    if new_refresh_token and new_refresh_token != refresh_token:
+        save_refresh_token(config_ws, new_refresh_token)
+        print(f"[OK] refresh_token dirotasi, sudah ditulis ulang ke "
+              f"{CONFIG_SHEET_NAME}!{REFRESH_TOKEN_CELL}.")
+
+    return access_token
 
 
 # ---------------------------------------------------------------------------
@@ -404,7 +425,7 @@ def main():
     target_sh = open_target_spreadsheet(gc, sa_info)
 
     stored_refresh_token = get_stored_refresh_token(config_ws)
-    access_token = refresh_access_token(stored_refresh_token)
+    access_token = refresh_access_token(config_ws, stored_refresh_token)
 
     months = months_to_process()
     print(f"[INFO] Brand filter: '{BRAND_FILTER}' | {len(months)} bulan x "
